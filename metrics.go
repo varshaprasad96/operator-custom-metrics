@@ -15,118 +15,35 @@
 package metrics
 
 import (
-	"math"
 	"net/http"
 
-	awsv1alpha1 "github.com/openshift/aws-account-operator/pkg/apis/aws/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-const (
-	// MetricsEndpoint is the port to export metrics on
-	MetricsEndpoint = ":8080"
-)
+// StartMetrics starts the server based on the metricsConfig provided by the user.
+func StartMetrics(config metricsConfig) {
+	// Register metrics only when the metric list is provided by the operator
+	if config.collectorList != nil {
+		RegisterMetrics(config.collectorList)
 
-var (
-	metricTotalAWSAccounts = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_aws_accounts",
-		Help: "Report how many accounts have been created in AWS org",
-	}, []string{"name"})
-	metricTotalAccountCRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_account_crs",
-		Help: "Report how many account CRs have been created",
-	}, []string{"name"})
-	metricTotalAccountCRsUnclaimed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_accounts_crs_unclaimed",
-		Help: "Report how many account CRs are unclaimed",
-	}, []string{"name"})
-	metricTotalAccountCRsClaimed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_accounts_crs_claimed",
-		Help: "Report how many account CRs are claimed",
-	}, []string{"name"})
-	metricTotalAccountCRsFailed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_accounts_crs_failed",
-		Help: "Report how many account  CRs are failed",
-	}, []string{"name"})
-	metricTotalAccountClaimCRs = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_total_aws_account_claim_crs",
-		Help: "Report how many account claim CRs have been created",
-	}, []string{"name"})
-	metricPoolSizeVsUnclaimed = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "aws_account_operator_pool_size_vs_unclaimed",
-		Help: "Report the difference between the pool size and the number of unclaimed account CRs",
-	}, []string{"name"})
-
-	metricsList = []prometheus.Collector{
-		metricTotalAWSAccounts,
-		metricTotalAccountCRs,
-		metricTotalAccountCRsUnclaimed,
-		metricTotalAccountCRsClaimed,
-		metricTotalAccountCRsFailed,
-		metricTotalAccountClaimCRs,
-		metricPoolSizeVsUnclaimed,
+		//Execute the user-defined function on how to collect metrics
+		config.recordMetricsFunction()
 	}
-)
 
-// StartMetrics register metrics and exposes them
-func StartMetrics() {
-	// Register metrics and start serving them on /metrics endpoint
-	RegisterMetrics()
-	http.Handle("/metrics", prometheus.Handler())
-	go http.ListenAndServe(MetricsEndpoint, nil)
+	http.Handle(config.metricsPath, prometheus.Handler())
+	log.Info("Port: %v", config.metricsPort)
+	metricsPort := ":" + (config.metricsPort)
+	go http.ListenAndServe(metricsPort, nil)
 }
 
-// RegisterMetrics for the operator
-func RegisterMetrics() error {
-	for _, metric := range metricsList {
+// RegisterMetrics takes the list of metrics to be registered from the user and
+// registeres to prometheus.
+func RegisterMetrics(list []prometheus.Collector) error {
+	for _, metric := range list {
 		err := prometheus.Register(metric)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-// UpdateAWSMetrics updates all AWS related metrics
-func UpdateAWSMetrics(totalAccounts int) {
-	metricTotalAWSAccounts.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(totalAccounts))
-}
-
-// UpdateAccountCRMetrics updates all metrics related to Account CRs
-func UpdateAccountCRMetrics(accountList *awsv1alpha1.AccountList) {
-
-	unclaimedAccountCount := 0
-	claimedAccountCount := 0
-	failedAccountCount := 0
-	for _, account := range accountList.Items {
-		if account.Status.Claimed == false {
-			if account.Status.State != "Failed" {
-				unclaimedAccountCount++
-			}
-		} else {
-			claimedAccountCount++
-		}
-		if account.Status.State == "Failed" {
-			failedAccountCount++
-		}
-	}
-
-	metricTotalAccountCRs.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(len(accountList.Items)))
-	metricTotalAccountCRsUnclaimed.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(unclaimedAccountCount))
-	metricTotalAccountCRsClaimed.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(claimedAccountCount))
-	metricTotalAccountCRsFailed.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(failedAccountCount))
-}
-
-// UpdateAccountClaimMetrics updates all metrics related to AccountClaim CRs
-func UpdateAccountClaimMetrics(accountClaimList *awsv1alpha1.AccountClaimList) {
-
-	metricTotalAccountClaimCRs.With(prometheus.Labels{"name": "aws-account-operator"}).Set(float64(len(accountClaimList.Items)))
-}
-
-// UpdatePoolSizeVsUnclaimed updates the metric that measures the difference between Poolsize and Unclaimed Account CRs
-func UpdatePoolSizeVsUnclaimed(poolSize int, unclaimedAccountCount int) {
-
-	metric := math.Abs(float64(poolSize) - float64(unclaimedAccountCount))
-
-	metricPoolSizeVsUnclaimed.With(prometheus.Labels{"name": "aws-account-operator"}).Set(metric)
 }
